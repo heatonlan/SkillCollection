@@ -175,6 +175,63 @@ pm2 save
 
 ---
 
+## 在其他机器上复用已有 Tunnel
+
+如果已经在一台机器上创建好了 Tunnel，想在另一台机器上运行同一个 Tunnel（或迁移），不需要重新创建，只需复制凭证文件。
+
+### 需要复制的文件
+
+从源机器的 `~/.cloudflared/` 复制到目标机器的相同目录：
+
+| 文件 | 作用 | 是否必须 |
+|------|------|----------|
+| `<TUNNEL_ID>.json` | Tunnel 凭据，用于认证 | 必须 |
+| `config.yml` | ingress 路由配置 | 必须（也可重新编写） |
+| `cert.pem` | 账号登录凭据，用于管理操作 | 仅管理时需要 |
+
+> `cert.pem` 只在执行管理操作（创建/删除 tunnel、配置 DNS 路由）时需要。如果只是运行已有 tunnel，只需 `<TUNNEL_ID>.json` 和 `config.yml`。
+
+### 步骤
+
+1. **安装 cloudflared**（见第一步）
+
+2. **复制凭证文件**到目标机器的 `~/.cloudflared/` 目录：
+   ```bash
+   # 在目标机器上创建目录
+   mkdir -p ~/.cloudflared
+
+   # 从源机器复制（通过 scp、U盘、或其他方式）
+   scp source-machine:~/.cloudflared/<TUNNEL_ID>.json ~/.cloudflared/
+   scp source-machine:~/.cloudflared/config.yml ~/.cloudflared/
+   ```
+
+3. **修改 config.yml** 中的端口映射（如果目标机器的服务端口不同）
+
+4. **启动 Tunnel**：
+   ```bash
+   cloudflared tunnel run <TUNNEL_NAME>
+   ```
+
+### 注意
+
+- 同一个 Tunnel 同一时间只能在一台机器上运行
+- 如果需要多台机器同时暴露服务，应为每台机器创建独立的 Tunnel
+- 凭证文件传输时注意安全，避免通过不安全的渠道（如明文邮件、公共聊天）发送
+
+---
+
+## 故障排查
+
+| 症状 | 原因 | 解决 |
+|------|------|------|
+| `ERR No tunnel credentials found` | 缺少 `<TUNNEL_ID>.json` | 从源机器复制凭据文件，或重新 `tunnel create` |
+| `ERR Unable to reach the origin service` | 本地服务未启动或端口不对 | 检查 `config.yml` 中的端口是否与实际服务一致 |
+| `ERR certificate error` | `cert.pem` 过期或缺失 | 重新执行 `cloudflared tunnel login` |
+| DNS 不生效 | CNAME 记录未创建 | 执行 `cloudflared tunnel route dns` 或在 Dashboard 手动添加 |
+| Tunnel 启动但网页 502 | 本地服务返回错误 | 检查本地服务日志，确认服务可在 localhost 访问 |
+
+---
+
 ## 注意事项
 
 1. `cert.pem` 和 `<TUNNEL_ID>.json` 是敏感文件，不要提交到 Git
