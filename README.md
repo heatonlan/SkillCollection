@@ -1,6 +1,18 @@
 # SkillCollection
 
-可复用的运维技能文档集合。
+可复用的 Claude Code 技能集合。每个技能包含：
+
+- `SKILL.md` — Claude Code 标准技能文件（YAML frontmatter + 指令），可直接放入 `~/.claude/skills/` 使用
+- `README.md` — 面向人类的详细操作手册
+
+## 使用方式
+
+将技能目录复制到 `~/.claude/skills/` 即可在 Claude Code 中通过 `/技能名` 调用：
+
+```bash
+cp -r cloudflare-tunnel ~/.claude/skills/
+cp -r verify-viewer ~/.claude/skills/
+```
 
 ## 技能列表
 
