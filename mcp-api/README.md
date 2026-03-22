@@ -11,6 +11,7 @@
 - [MCP 三大原语](#mcp-三大原语)
 - [五个本质区别](#五个本质区别)
 - [选型指南](#选型指南)
+- [MCP 实现指南](#mcp-实现指南)
 - [常见误区](#常见误区)
 
 ## 一句话理解
@@ -194,6 +195,346 @@ MCP server 内部通常封装了对传统 API 的调用：
 ```
 
 MCP 不替代 API，而是在 AI 和 API 之间加了一层标准化的协议。
+
+## MCP 实现指南
+
+### 整体架构
+
+一个 MCP server 的实现本质上就是：**用标准 SDK 把你的函数/数据包装成 Tool/Resource，然后通过 stdio 或 HTTP 暴露给 AI 客户端。**
+
+```
+你的业务逻辑（函数、API 调用、数据库查询）
+        │
+        ▼
+┌───────────────────────┐
+│   MCP SDK 包装层       │  ← 你写的代码，核心工作在这里
+│  - 定义 Tool          │
+│  - 定义 Resource      │
+│  - 定义 Prompt        │
+└──────────┬────────────┘
+           │
+     ┌─────┴──────┐
+     │  Transport  │  ← SDK 内置，几乎不需要你写
+     │ stdio / HTTP│
+     └─────┬──────┘
+           │
+     AI 客户端连接
+```
+
+### 技术栈选择
+
+| 语言 | SDK | 安装 | 适用场景 |
+|------|-----|------|---------|
+| TypeScript | `@modelcontextprotocol/sdk` | `npm i @modelcontextprotocol/sdk zod` | Web 服务封装、API 代理、通用工具 |
+| Python | `fastmcp` | `pip install fastmcp` | 数据处理、ML、科学计算 |
+
+### TypeScript 实现
+
+#### 最小可运行 Server
+
+```typescript
+#!/usr/bin/env node
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+// Create server instance
+const server = new McpServer({
+  name: "weather-server",
+  version: "1.0.0",
+});
+
+// Register a tool
+server.tool(
+  "get_weather",
+  "Get current weather for a city",
+  { city: z.string().describe("City name, e.g. Beijing") },
+  async ({ city }) => {
+    const res = await fetch(`https://api.weather.example/v1?q=${city}`);
+    const data = await res.json();
+    return {
+      content: [{ type: "text", text: JSON.stringify(data) }],
+    };
+  }
+);
+
+// Register a resource
+server.resource(
+  "supported-cities",
+  "weather://cities",
+  { description: "List of supported cities" },
+  async () => ({
+    contents: [{
+      uri: "weather://cities",
+      text: "Beijing, Shanghai, Tokyo, New York, London",
+    }],
+  })
+);
+
+// Start with stdio transport
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+#### 项目初始化
+
+```bash
+mkdir my-mcp-server && cd my-mcp-server
+npm init -y
+npm install @modelcontextprotocol/sdk zod
+npm install -D typescript tsx
+```
+
+`tsconfig.json`：
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "outDir": "dist",
+    "strict": true
+  }
+}
+```
+
+`package.json` 中添加：
+
+```json
+{
+  "type": "module",
+  "bin": { "my-mcp-server": "dist/index.js" },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts"
+  }
+}
+```
+
+### Python 实现
+
+#### 最小可运行 Server
+
+```python
+from fastmcp import FastMCP
+
+mcp = FastMCP("weather-server")
+
+@mcp.tool
+def get_weather(city: str) -> str:
+    """Get current weather for a city."""
+    import urllib.request, json
+    url = f"https://api.weather.example/v1?q={city}"
+    data = json.loads(urllib.request.urlopen(url).read())
+    return json.dumps(data)
+
+@mcp.resource("weather://cities")
+def list_cities() -> str:
+    """List of supported cities."""
+    return "Beijing, Shanghai, Tokyo, New York, London"
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+#### 项目初始化
+
+```bash
+mkdir my-mcp-server && cd my-mcp-server
+python -m venv .venv && source .venv/bin/activate
+pip install fastmcp
+```
+
+Python SDK 的 `@mcp.tool` 装饰器自动从函数签名中提取：
+- **函数名** → tool name
+- **docstring** → tool description
+- **类型注解** → JSON Schema 参数定义
+
+### 两种传输方式
+
+#### stdio（本地工具推荐）
+
+AI 客户端作为父进程 spawn MCP server 子进程，通过 stdin/stdout 交换 JSON-RPC 消息。
+
+```
+AI Client (父进程)
+    │
+    ├─ spawn ──→ MCP Server (子进程)
+    │              stdin  ← JSON-RPC request
+    │              stdout → JSON-RPC response
+    │              stderr → 日志（不影响协议）
+    │
+    └─ 会话结束时 kill 子进程
+```
+
+特点：
+- 零网络配置，即开即用
+- 进程隔离，安全性好
+- 每个客户端连接对应一个进程
+- 适合本地工具：文件系统、Git、数据库、CLI 封装
+
+#### Streamable HTTP（远程服务推荐）
+
+MCP server 作为 HTTP 服务运行，客户端通过 HTTP POST 发送请求，通过 SSE 接收流式响应。
+
+```
+AI Client ──HTTP POST──→  MCP Server (:3000/mcp)
+           ←───SSE────    (长连接流式返回)
+```
+
+TypeScript 示例（Express 中间件）：
+
+```typescript
+import express from "express";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+
+const app = express();
+const server = new McpServer({ name: "remote-server", version: "1.0.0" });
+
+// ... register tools ...
+
+app.post("/mcp", async (req, res) => {
+  const transport = new StreamableHTTPServerTransport("/mcp");
+  await server.connect(transport);
+  await transport.handleRequest(req, res);
+});
+
+app.listen(3000);
+```
+
+特点：
+- 支持远程部署和多用户
+- 可以加认证、负载均衡
+- 适合云服务、SaaS 工具
+
+### 客户端接入配置
+
+#### Claude Desktop
+
+配置文件位置：
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+stdio server 配置：
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "node",
+      "args": ["/path/to/weather-server/dist/index.js"],
+      "env": {
+        "WEATHER_API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+修改后需**完全重启** Claude Desktop。
+
+#### Cursor
+
+配置文件位置：
+- 项目级: `.cursor/mcp.json`（项目根目录）
+- 全局: `~/.cursor/mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "weather": {
+      "command": "node",
+      "args": ["/path/to/weather-server/dist/index.js"],
+      "env": {
+        "WEATHER_API_KEY": "your-key"
+      }
+    }
+  }
+}
+```
+
+Cursor 支持热重载，无需重启。
+
+#### 远程 HTTP Server 配置
+
+```json
+{
+  "mcpServers": {
+    "remote-weather": {
+      "url": "https://weather-mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer your-token"
+      }
+    }
+  }
+}
+```
+
+### 实现四步走
+
+```
+第 1 步          第 2 步            第 3 步          第 4 步
+选 SDK           定义能力            选传输           注册到客户端
+┌──────┐      ┌──────────┐      ┌──────────┐      ┌──────────┐
+│ TS   │      │ Tool     │      │ stdio    │      │ Claude   │
+│  or  │ ──→  │ Resource │ ──→  │   or     │ ──→  │ Cursor   │
+│ Py   │      │ Prompt   │      │ HTTP     │      │ 其他     │
+└──────┘      └──────────┘      └──────────┘      └──────────┘
+```
+
+1. **选 SDK** — TypeScript（npm）或 Python（pip），安装依赖
+2. **定义能力** — 写业务函数，用 `server.tool()` 或 `@mcp.tool` 注册，关键是写好 description 和参数 schema，这决定了 AI 能否正确理解和调用
+3. **选传输** — 本地工具用 stdio（默认），远程服务用 Streamable HTTP
+4. **注册到客户端** — 在 AI 客户端配置 JSON 中添加 server 条目
+
+### 实际案例：把现有 REST API 包装成 MCP Server
+
+假设你有一个内部 REST API `https://internal.api/users`，想让 AI 能查询用户信息：
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "user-api", version: "1.0.0" });
+const API_BASE = process.env.API_BASE || "https://internal.api";
+
+// Wrap REST GET /users/:id as MCP tool
+server.tool(
+  "get_user",
+  "Look up a user by ID, returns name/email/role",
+  { user_id: z.string().describe("User ID") },
+  async ({ user_id }) => {
+    const res = await fetch(`${API_BASE}/users/${user_id}`, {
+      headers: { Authorization: `Bearer ${process.env.API_TOKEN}` },
+    });
+    if (!res.ok) {
+      return { content: [{ type: "text", text: `Error: ${res.status}` }], isError: true };
+    }
+    return { content: [{ type: "text", text: JSON.stringify(await res.json()) }] };
+  }
+);
+
+// Wrap REST GET /users?q=keyword as MCP tool
+server.tool(
+  "search_users",
+  "Search users by name or email keyword",
+  { keyword: z.string().describe("Search keyword") },
+  async ({ keyword }) => {
+    const res = await fetch(`${API_BASE}/users?q=${encodeURIComponent(keyword)}`, {
+      headers: { Authorization: `Bearer ${process.env.API_TOKEN}` },
+    });
+    return { content: [{ type: "text", text: JSON.stringify(await res.json()) }] };
+  }
+);
+
+await server.connect(new StdioServerTransport());
+```
+
+这个例子展示了 MCP 和 API 的关系：**MCP server 内部调 REST API，对 AI 暴露语义化的 tool 接口**。
 
 ## 常见误区
 

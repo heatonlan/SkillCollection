@@ -101,4 +101,81 @@ resource://db/schema/users
 > API 好比**菜单上的菜名和价格**——顾客（开发者）看懂了才能点菜。
 > MCP 好比**智能点餐助手**——它自己读菜单、理解顾客需求、代为下单，顾客只需说"我想吃辣的"。
 
-详细说明和架构图见 [README.md](README.md)。
+## MCP 实现方式
+
+### 技术栈选择
+
+| 语言 | SDK 包名 | 适用场景 |
+|------|---------|---------|
+| TypeScript | `@modelcontextprotocol/sdk` + `zod` | Web 服务封装、API 代理、通用工具 |
+| Python | `fastmcp`（或 `mcp`） | 数据分析、ML 模型、科学计算 |
+
+### TypeScript 最小实现
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+const server = new McpServer({ name: "my-server", version: "1.0.0" });
+
+server.tool(
+  "greet",
+  "Say hello to someone",
+  { name: z.string() },
+  async ({ name }) => ({
+    content: [{ type: "text", text: `Hello, ${name}!` }],
+  })
+);
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+### Python 最小实现
+
+```python
+from fastmcp import FastMCP
+
+mcp = FastMCP("my-server")
+
+@mcp.tool
+def greet(name: str) -> str:
+    """Say hello to someone."""
+    return f"Hello, {name}!"
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+### 两种传输方式
+
+| 方式 | 通信机制 | 适用场景 |
+|------|---------|---------|
+| **stdio** | 父进程 spawn 子进程，通过 stdin/stdout 交换 JSON-RPC | 本地工具（CLI、文件系统、Git） |
+| **Streamable HTTP** | HTTP POST + SSE 流 | 远程服务、云部署、多用户 |
+
+### 客户端接入配置
+
+Claude Desktop / Cursor 的 `mcpServers` 配置：
+
+```jsonc
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "node",
+      "args": ["path/to/server.js"],
+      "env": { "API_KEY": "xxx" }
+    }
+  }
+}
+```
+
+### 实现四步走
+
+1. **选 SDK** — TypeScript 或 Python，安装依赖
+2. **定义 Tool** — 写函数，声明参数 schema 和描述
+3. **选传输** — 本地用 stdio，远程用 Streamable HTTP
+4. **注册到客户端** — 在 AI 客户端配置文件中添加 server 条目
+
+详细实现指南、完整代码模板和进阶用法见 [README.md](README.md)。
