@@ -12,6 +12,7 @@
 ```bash
 cp -r cloudflare-tunnel ~/.claude/skills/
 cp -r verify-viewer ~/.claude/skills/
+cp -r auto-dev-tree ~/.claude/skills/
 ```
 
 ## 技能列表
@@ -21,3 +22,4 @@ cp -r verify-viewer ~/.claude/skills/
 | [cloudflare-tunnel](./cloudflare-tunnel/) | 用 Cloudflare Tunnel 将本地服务暴露到公网 |
 | [verify-viewer](./verify-viewer/) | 通用项目验证框架，统一执行验证并展示结果 |
 | [nxbuild](./nxbuild/) | NeoX 引擎构建 CLI，支持 Windows/Android/Web/Minigame |
+| [auto-dev-tree](./auto-dev-tree/) | 自主递归开发框架，目标树形展开 + DTV 循环自动验证 |
